@@ -1,0 +1,27 @@
+#!./.mnist-android/bin/python
+import os
+import tensorflow as tf
+import fire
+import numpy as np
+
+NR_OF_TRAINING_REC = 1000
+
+def get_data(out_dir='data'):
+    # Make dir if necessary
+    if not os.path.exists(out_dir):
+        os.mkdir(out_dir)
+
+    # Download data
+    fashion_mnist = tf.keras.datasets.fashion_mnist
+    (train_images, train_labels), (test_images, test_labels) = fashion_mnist.load_data()
+    x_data = train_images[:NR_OF_TRAINING_REC].reshape(-1, 28)
+    x_data_norm = (x_data / 255.0).astype(np.float32)
+    np.savetxt('data/fashionmnist_image1000_norm.csv', x_data_norm, delimiter=',')
+    y_data = train_labels[:NR_OF_TRAINING_REC]
+    y_data_onehot = tf.keras.utils.to_categorical(y_data)
+    np.savetxt('data/fashionmnist_labels1000_onehot.csv', y_data_onehot, delimiter=',')
+
+
+
+if __name__ == '__main__':
+    fire.Fire(get_data)
