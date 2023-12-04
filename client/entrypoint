@@ -1,0 +1,194 @@
+#!./.mnist-pytorch/bin/python
+import collections
+import math
+import os
+
+import docker
+import fire
+import pandas as pd
+#import torch
+
+from fedn.utils.helpers import get_helper, save_metadata, save_metrics
+import tensorflow as tf
+import numpy as np
+HELPER_MODULE = 'androidhelper'
+NUM_CLASSES = 10
+
+layernames = ['layer0', 'layer1', 'layer2', 'layer3']
+
+def _compile_model():
+    """ Compile the tf model.
+
+    :return: The compiled model.
+    :rtype: keras
+    """
+    IMG_SIZE = 28
+    model = tf.keras.Sequential([
+        tf.keras.layers.Flatten(input_shape=(IMG_SIZE, IMG_SIZE), name='flatten'),
+        tf.keras.layers.Dense(128, activation='relu', name='dense_1'),
+        tf.keras.layers.Dense(10, name='dense_2')
+    ])
+
+    model.compile(optimizer='adam', loss=tf.keras.losses.CategoricalCrossentropy(from_logits=True),
+                  metrics=['accuracy'])
+
+
+    return model
+
+
+def _load_data(data_path, is_train=True):
+    """ Load data from disk. 
+
+    :param data_path: Path to data file.
+    :type data_path: str
+    :param is_train: Whether to load training or test data.
+    :type is_train: bool
+    :return: Tuple of data and labels.
+    :rtype: tuple
+    """
+    print("data_path: ", data_path)
+    x_train = np.array(pd.read_csv('/var/data/fashionmnist_image_norm.csv', header=None)).reshape([-1, 28, 28])
+    y_train = np.array(pd.read_csv('/var/data/fashionmnist_labels.csv', header=None))
+
+    return x_train, y_train
+
+
+def _save_model(model, out_path):
+    """ Save model to disk. 
+
+    :param model: The model to save.
+    :type model: torch.nn.Module
+    :param out_path: The path to save to.
+    :type out_path: str
+    """
+    weights = model.get_weights()
+    jsonweights = {'layer' + str(i): [float(r) for r in w.flatten()] for i, w in enumerate(weights)}
+
+    helper = get_helper(HELPER_MODULE)
+    helper.save(jsonweights, out_path)
+
+
+def _load_model(model_path):
+    """ Load model from disk.
+
+    param model_path: The path to load from.
+    :type model_path: str
+    :return: The loaded model.
+    :rtype: torch.nn.Module
+    """
+    helper = get_helper(HELPER_MODULE)
+    android_weight = helper.load(model_path)
+
+    layer_shapes = {
+        'layer0': [784, 128],
+        'layer1': [128],
+        'layer2': [128, 10],
+        'layer3': [10]
+    }
+
+    weights_a = [np.array(android_weight[layer]).reshape(layer_shapes[layer]) for layer in android_weight]
+    model = _compile_model()
+    model.set_weights(weights_a)
+
+    return model
+
+
+def init_seed(out_path='seed'):
+    """ Initialize seed model.
+
+    :param out_path: The path to save the seed model to.
+    :type out_path: str
+    """
+    # Init and save
+    model = _compile_model()
+    _save_model(model, out_path)
+
+
+def train(in_model_path, out_model_path, data_path=None, batch_size=32, epochs=1, lr=0.01):
+    """ Train model.
+
+    :param in_model_path: The path to the input model.
+    :type in_model_path: str
+    :param out_model_path: The path to save the output model to.
+    :type out_model_path: str
+    :param data_path: The path to the data file.
+    :type data_path: str
+    :param batch_size: The batch size to use.
+    :type batch_size: int
+    :param epochs: The number of epochs to train.
+    :type epochs: int
+    :param lr: The learning rate to use.
+    :type lr: float
+
+    """
+
+    print("train start (dummy run)")
+    # Load data
+    #x_train, y_train = _load_data(data_path)
+
+    # Load model
+    model = _load_model(in_model_path)
+
+    metadata = {
+        'num_examples': 0, #<---this will ignore the weight update from this client
+        'batch_size': batch_size,
+        'epochs': epochs,
+        'lr': lr
+    }
+    print("metadata: ", metadata)
+    # Save JSON metadata file
+    save_metadata(metadata, out_model_path)
+
+    # Save model update
+    _save_model(model, out_model_path)
+    print("training done (dummy run)")
+
+
+def validate(in_model_path, out_json_path, data_path=None):
+    """ Validate model.
+
+    :param in_model_path: The path to the input model.
+    :type in_model_path: str
+    :param out_json_path: The path to save the output JSON to.
+    :type out_json_path: str
+    :param data_path: The path to the data file.
+    :type data_path: str
+    """
+    print("validate start, this is latest")
+    print("data_path: ", data_path)
+    # Load data
+    x_train, y_train = _load_data(data_path)
+    fashion_mnist = tf.keras.datasets.fashion_mnist
+    (_,__), (test_images, test_labels) = fashion_mnist.load_data()
+
+    x_test = (test_images / 255.0).astype(np.float32)
+
+    y_test = tf.keras.utils.to_categorical(test_labels)
+
+    # Load model
+    model = _load_model(in_model_path)
+
+    # Evaluate
+    test_loss, test_accuracy = model.evaluate(x_test, y_test)
+    train_loss, train_accuracy = model.evaluate(x_train, y_train)
+
+    # JSON schema
+    report = {
+
+        "test_loss": test_loss,
+        "test_accuracy": test_accuracy,
+        "train_loss": train_loss,
+        "train_accuracy": train_accuracy
+
+    }
+
+    # Save JSON
+    save_metrics(report, out_json_path)
+
+
+if __name__ == '__main__':
+    fire.Fire({
+        'init_seed': init_seed,
+        'train': train,
+        'validate': validate,
+    })
